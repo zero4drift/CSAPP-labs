@@ -64,9 +64,9 @@ team_t team = {
 
 /* Doubly linked free list manipulations */
 #define GET_PREV(p)      (GET(p))	/* Just a alias of former GET */
-#define PUT_PREV(p, val) (PUT(p, val))  /* Alias of former PUT */
+#define PUT_PREV(p, val) (PUT(p, (unsigned int)val))  /* Alias of former PUT */
 #define GET_SUCC(p)      (*((unsigned int *)p + 1))
-#define PUT_SUCC(p, val) (*((unsigned int *)p + 1) = (val))
+#define PUT_SUCC(p, val) (*((unsigned int *)p + 1) = (unsigned int)(val))
 
 /* Global variables */
 static char *heap_listp = 0;  /* Pointer to first block */
@@ -86,7 +86,7 @@ static void *coalesce(void *bp);
 static void printblock(void *bp);
 static void check(int verbose);
 static void checkblock(void *bp);
-static void checkchain(unsigned int *starter);
+static void checkchain(int verbose);
 void mm_check(int verbose);
 /* end explicit free list */
 
@@ -173,6 +173,7 @@ void *mm_malloc(size_t size)
 void mm_free(void *bp)
 /* based on explicit free list */
 {
+  unsigned int prev_free, succ_free, starter_succ_free;
   if (bp == 0)
     return;
   
@@ -180,10 +181,22 @@ void mm_free(void *bp)
   if (heap_listp == 0){
     mm_init();
   }
-
+  
   PUT(HDRP(bp), PACK(size, 0));
   PUT(FTRP(bp), PACK(size, 0));
-  coalesce(bp);
+  bp = coalesce(bp);
+
+  starter_succ_free = GET_SUCC(starter);
+  prev_free = GET_PREV(bp);
+  if(prev_free == (unsigned int)starter) return;
+  succ_free = GET_SUCC(bp);
+  if(succ_free) PUT_PREV(succ_free, prev_free);
+  if(prev_free) PUT_SUCC(prev_free, succ_free);
+  PUT_PREV(bp, starter);
+  PUT_SUCC(starter, bp);
+  PUT_SUCC(bp, starter_succ_free);
+  if(starter_succ_free)
+    PUT_PREV(starter_succ_free, bp);
 }
 
 /*
@@ -199,23 +212,8 @@ static void *coalesce(void *bp)
   size_t size = GET_SIZE(HDRP(bp));
 
   if (prev_alloc && next_alloc) {            /* Case 1 */
-    succ_free = GET_SUCC(starter);
-    prev_free = (unsigned int)starter;
-    for(; succ_free != 0; succ_free = GET_SUCC(succ_free))
-      {
-	if(succ_free > (unsigned int)bp)
-	  {
-	    PUT_PREV(succ_free, (unsigned int)bp);
-	    PUT_SUCC(bp, succ_free);
-	    PUT_SUCC(prev_free, (unsigned int)bp);
-	    PUT_PREV(bp, prev_free);
-	    return bp;
-	  }
-	prev_free = succ_free;
-      }
-    PUT_SUCC(bp, succ_free);
-    PUT_SUCC(prev_free, (unsigned int)bp);
-    PUT_PREV(bp, prev_free);
+    PUT_PREV(bp, 0);
+    PUT_SUCC(bp, 0);
     return bp;
   }
 
@@ -249,14 +247,12 @@ static void *coalesce(void *bp)
     size += GET_SIZE(HDRP(prev_bp)) +
       GET_SIZE(FTRP(next_bp));
     succ_free = GET_SUCC(next_bp);
+    prev_free = GET_PREV(next_bp);
+    PUT_SUCC(prev_free, succ_free);
+    if(succ_free) PUT_PREV(succ_free, prev_free);
     PUT(HDRP(prev_bp), PACK(size, 0));
     PUT(FTRP(next_bp), PACK(size, 0));
     bp = PREV_BLKP(bp);
-    PUT_SUCC(bp, succ_free);
-    if(succ_free)
-      {
-	PUT_PREV(succ_free, (unsigned int)bp);
-      }
   }
   return bp;
 }
@@ -316,6 +312,7 @@ void mm_check(int verbose)
 /* $begin mmextendheap */
 static void *extend_heap(size_t words)
 {
+  unsigned int prev_free, succ_free, starter_succ_free;
   char *bp;
   size_t size;
 
@@ -330,7 +327,20 @@ static void *extend_heap(size_t words)
   PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
   
   /* Coalesce if the previous block was free */
-  return coalesce(bp);
+  bp = coalesce(bp);
+  starter_succ_free = GET_SUCC(starter);
+  prev_free = GET_PREV(bp);
+  if(prev_free == (unsigned int)starter) return bp;
+  succ_free = GET_SUCC(bp);
+  if(succ_free) PUT_PREV(succ_free, prev_free);
+  if(prev_free) PUT_SUCC(prev_free, succ_free);
+  PUT_PREV(bp, starter);
+  PUT_SUCC(starter, bp);
+  PUT_SUCC(bp, starter_succ_free);
+  if(starter_succ_free)
+    PUT_PREV(starter_succ_free, bp);
+
+  return bp;
 }
 
 /*
@@ -412,18 +422,30 @@ static void checkblock(void *bp)
     }
 }
 
-static void checkchain(unsigned int *starter)
+static void checkchain(int verbose)
 {
   unsigned int *prev_chain = starter;
   unsigned int succ_chain = GET_SUCC(starter);
   while(succ_chain)
     {
-      printf("{%p} -> {%p}\n", prev_chain, (void *)succ_chain);
-      printf("{%p} <- {%p}\n", (void *)GET_PREV(succ_chain), (void *)succ_chain);
+      if(verbose)
+	{
+	  printf("{%p} -> {%p}\n", prev_chain, (void *)succ_chain);
+	  printf("{%p} <- {%p}\n", (void *)GET_PREV(succ_chain), (void *)succ_chain);
+	}
+      if(prev_chain != (void *)GET_PREV(succ_chain))
+	{
+	  printf("%p, %p unmatch\n", prev_chain, (void *)GET_PREV(succ_chain));
+	  printf("prev %p, succ %p\n", (void *)GET_PREV(prev_chain), (void *)GET_SUCC(prev_chain));
+	  printf("prev %p, succ %p\n", (void *)GET_PREV((void *)GET_PREV(succ_chain)), (void *)GET_SUCC((void *)GET_PREV(succ_chain)));
+	  printf("%p\n", (unsigned int *)GET_SUCC(starter));
+	  printf("%p\n", starter);
+	  exit(1);
+	}
       prev_chain = (unsigned int *)succ_chain;
       succ_chain = GET_SUCC(succ_chain);
     }
-  printf("Stopped check chain\n");
+  printf("\n");
 }
 
 /*
@@ -448,8 +470,6 @@ void check(int verbose)
   if ((GET_SIZE(HDRP(bp)) != 0) || !(GET_ALLOC(HDRP(bp))))
     printf("Bad epilogue header\n");
   if(verbose)
-    {
-      printblock(bp);
-      checkchain(starter);
-    }
+    printblock(bp);
+  checkchain(verbose);
 }
