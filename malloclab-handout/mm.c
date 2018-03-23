@@ -35,7 +35,7 @@ team_t team = {
   ""
 };
 
-/* implict free list */
+/* explicit free list */
 /* Basic constants and macros */
 #define WSIZE       4       /* Word and header/footer size (bytes) */
 #define DSIZE       8       /* Double word size (bytes) */
@@ -62,14 +62,21 @@ team_t team = {
 #define NEXT_BLKP(bp)  ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp)  ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+/* Doubly linked free list manipulations */
+#define GET_PREV(p)      (GET(p))	/* Just a alias of former GET */
+#define PUT_PREV(p, val) (PUT(p, val))  /* Alias of former PUT */
+#define GET_SUCC(p)      (*((unsigned int *)p + 1))
+#define PUT_SUCC(p, val) (*((unsigned int *)p + 1) = (val))
+
 /* Global variables */
 static char *heap_listp = 0;  /* Pointer to first block */
 /* 
-   A pointer whose value is heap_listp + 4
-   That place stores a pointer of the successive free block
+   A pointer whose value is an address of second heap byte
+   That place always sotres 0 for there would be no prev free block
+   the next word stores an address of the successive free block
    If there is no successive one, the content is 0
 */
-static unsigned int *starter = NULL;
+static unsigned int *starter = 0;
 
 /* Function prototypes for internal helper routines */
 static void *extend_heap(size_t words);
@@ -81,7 +88,7 @@ static void check(int verbose);
 static void checkblock(void *bp);
 static void checkchain(unsigned int *starter);
 void mm_check(int verbose);
-/* end implict free list */
+/* end explicit free list */
 
 
 /* single word (4) or double word (8) alignment */
@@ -97,25 +104,23 @@ void mm_check(int verbose);
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
-/* first based on implict free list */
+/* based on explicit free list */
 {
   void *bp;
   mem_init();
 
   /* Create the initial empty heap */
-  if ((heap_listp = (char *)mem_sbrk(4*WSIZE)) == (char *)-1)
+  if ((heap_listp = (char *)mem_sbrk(6*WSIZE)) == (char *)-1)
     return -1;
-  PUT(heap_listp, 0);	                      /* Alignment padding */
-  /*
-    starter is always the inital heap_listp + 4 
-    It stores the address of successive free block
-  */
-  starter = (unsigned int *)(heap_listp);
-  *starter = 0;
-  PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1)); /* Prologue header */
-  PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
-  PUT(heap_listp + (3*WSIZE), PACK(0, 1));     /* Epilogue header */
-  heap_listp += (2*WSIZE);
+  
+  starter = (unsigned int *)mem_heap_lo() + 1;
+  PUT(heap_listp, 0);	                       /* Alignment padding */
+  PUT_PREV(starter, 0);
+  PUT_SUCC(starter, 0);			       /* First, starter is alone */
+  PUT(heap_listp + (3*WSIZE), PACK(DSIZE, 1)); /* Prologue header */
+  PUT(heap_listp + (4*WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
+  PUT(heap_listp + (5*WSIZE), PACK(0, 1));     /* Epilogue header */
+  heap_listp += (4*WSIZE);
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
   bp = extend_heap(CHUNKSIZE/WSIZE);
   if (bp == NULL)
@@ -125,10 +130,10 @@ int mm_init(void)
 
 /* 
  * mm_malloc - Allocate a block by incrementing the brk pointer.
- *     Always allocate a block whose size is a multiple of the alignment.
+ * Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size)
-/* first based on implict free list */
+/* based on explicit free list */
 {
   size_t asize;      /* Adjusted block size */
   size_t extendsize; /* Amount to extend heap if no fit */
@@ -156,10 +161,8 @@ void *mm_malloc(size_t size)
 
   /* No fit found. Get more memory and place the block */
   extendsize = MAX(asize,CHUNKSIZE);
-  /* printf("NO FIT\n"); */
   if ((bp = (char *)extend_heap(extendsize/WSIZE)) == NULL)
     return NULL;
-  /* printf("Is that bp ok %p\n", bp); */
   place(bp, asize);
   return bp;
 }
@@ -168,7 +171,7 @@ void *mm_malloc(size_t size)
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *bp)
-/* first based on implict free list */
+/* based on explicit free list */
 {
   if (bp == 0)
     return;
@@ -187,102 +190,72 @@ void mm_free(void *bp)
  * coalesce - Boundary tag coalescing. Return ptr to coalesced block
  */
 static void *coalesce(void *bp)
-/* first based on a implict free list */
+/* based on a explicit free list */
 {
+  void *prev_bp, *next_bp;
   unsigned int succ_free, prev_free;
   size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
   size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
   size_t size = GET_SIZE(HDRP(bp));
 
   if (prev_alloc && next_alloc) {            /* Case 1 */
-    /*
-      Starter always stores the address of next free block
-      First double word of free block stores the address of previous block
-      or the address of starter
-      There is no successive free block, so the next double word stores 0
-    */
-    succ_free = *starter;
-    /* printf("starter succ %p\n", (void *)succ_free); */
+    succ_free = GET_SUCC(starter);
     prev_free = (unsigned int)starter;
-    if(!succ_free)
+    for(; succ_free != 0; succ_free = GET_SUCC(succ_free))
       {
-	*starter = (unsigned int)bp;
-	*((unsigned int *)bp) = (unsigned int)starter;
-	*((unsigned int *)bp + 1) = 0;
-	/* printf("%p\n", (void *)(*(unsigned int *)bp)); */
-      }
-    else
-      {
-	/* printf("%p\n", (void *)bp); */
-	for(succ_free = *starter; succ_free != 0; succ_free = *((unsigned int *)succ_free + 1))
+	if(succ_free > (unsigned int)bp)
 	  {
-	    if(succ_free > (unsigned int)bp)
-	      {
-		/* printf("prev_free %p\n", (void *)prev_free); */
-		/* printf("second starter succ %p\n", (void *)succ_free); */
-		*((unsigned int *)succ_free) = (unsigned int)bp;
-		*((unsigned int *)bp + 1) = (unsigned int)succ_free;
-		if(prev_free == (unsigned int)starter)
-		  {
-		    *((unsigned int *)prev_free) = (unsigned int)bp;
-		  }
-		else
-		  {
-		    *((unsigned int *)prev_free + 1) = (unsigned int)bp;
-		  }
-		*((unsigned int *)bp) = (unsigned int)prev_free;
-		return bp;
-	      }
-	    prev_free = succ_free;
+	    PUT_PREV(succ_free, (unsigned int)bp);
+	    PUT_SUCC(bp, succ_free);
+	    PUT_SUCC(prev_free, (unsigned int)bp);
+	    PUT_PREV(bp, prev_free);
+	    return bp;
 	  }
-	*((unsigned int *)bp + 1) = 0;
-	*((unsigned int *)prev_free + 1) = (unsigned int)bp;
-	*((unsigned int *)bp) = (unsigned int)prev_free;
+	prev_free = succ_free;
       }
+    PUT_SUCC(bp, succ_free);
+    PUT_SUCC(prev_free, (unsigned int)bp);
+    PUT_PREV(bp, prev_free);
     return bp;
   }
 
   else if (prev_alloc && !next_alloc) {      /* Case 2 */
-    size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-    /* printf("SIZE!!!!! %d\n", (int)size); */
-    prev_free = *((unsigned int *)(NEXT_BLKP(bp)));
-    succ_free = *((unsigned int *)(NEXT_BLKP(bp)) + 1);
+    next_bp = NEXT_BLKP(bp);
+    size += GET_SIZE(HDRP(next_bp));
+    prev_free = GET_PREV(next_bp);
+    succ_free = GET_SUCC(next_bp);
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size,0));
-    *((unsigned int *)bp) = prev_free;
-    *((unsigned int *)bp + 1) = succ_free;
+    PUT_PREV(bp, prev_free);
+    PUT_SUCC(bp, succ_free);
     if(succ_free)
       {
-	*((unsigned int *)succ_free) = (unsigned int)bp;
+	PUT_PREV(succ_free, (unsigned int)bp);
       }
-    if(prev_free == (unsigned int)starter)
-      {
-	*((unsigned int *)prev_free) = (unsigned int)bp;
-      }
-    else
-      {
-	*((unsigned int *)prev_free + 1) = (unsigned int)bp;
-      }
+    PUT_SUCC(prev_free, (unsigned int)bp);
   }
 
   else if (!prev_alloc && next_alloc) {      /* Case 3 */
-    size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+    prev_bp = PREV_BLKP(bp);
+    size += GET_SIZE(HDRP(prev_bp));
     PUT(FTRP(bp), PACK(size, 0));
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+    PUT(HDRP(prev_bp), PACK(size, 0));
     bp = PREV_BLKP(bp);
   }
 
   else {                                     /* Case 4 */
-    size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
-      GET_SIZE(FTRP(NEXT_BLKP(bp)));
-    succ_free = *((unsigned int *)NEXT_BLKP(bp) + 1);
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+    prev_bp = PREV_BLKP(bp);
+    next_bp = NEXT_BLKP(bp);
+    size += GET_SIZE(HDRP(prev_bp)) +
+      GET_SIZE(FTRP(next_bp));
+    succ_free = GET_SUCC(next_bp);
+    PUT(HDRP(prev_bp), PACK(size, 0));
+    PUT(FTRP(next_bp), PACK(size, 0));
     bp = PREV_BLKP(bp);
-    *((unsigned int *)bp + 1) = succ_free;
+    PUT_SUCC(bp, succ_free);
     if(succ_free)
       {
-	*((unsigned int *)succ_free) = (unsigned int)bp;
+	PUT_PREV(succ_free, (unsigned int)bp);
       }
   }
   return bp;
@@ -350,7 +323,6 @@ static void *extend_heap(size_t words)
   size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
   if ((long)(bp = (char *)mem_sbrk(size)) == -1)
     return NULL;
-  /* printf("extend %p\n", bp); */
 
   /* Initialize free block header/footer and the epilogue header */
   PUT(HDRP(bp), PACK(size, 0));         /* Free block header */
@@ -369,60 +341,28 @@ static void place(void *bp, size_t asize)
 {
   size_t csize = GET_SIZE(HDRP(bp));
   unsigned int prev_free, succ_free;
-  prev_free = *((unsigned int *)bp);
-  succ_free = *((unsigned int *)(bp) + 1);
+  prev_free = GET_PREV(bp);
+  succ_free = GET_SUCC(bp);
 
   if ((csize - asize) >= (2*DSIZE)) {
     PUT(HDRP(bp), PACK(asize, 1));
     PUT(FTRP(bp), PACK(asize, 1));
     bp = NEXT_BLKP(bp);
-    /* printf("left space address %p\n", (void *)bp); */
-    /* printf("prev_free %p\n", (void *)prev_free); */
-    /* printf("succ_free %p\n", (void *)succ_free); */
-    /* printf("starter succ %p\n", (void *)(*starter)); */
     PUT(HDRP(bp), PACK(csize-asize, 0));
     PUT(FTRP(bp), PACK(csize-asize, 0));
-    /* mm_check(0); */
-    /* checkchain(starter); */
-    /* printf("\n"); */
     if(succ_free)
       {
-	*((unsigned int *)succ_free) = (unsigned long)bp;
+	PUT_PREV(succ_free, (unsigned int)bp);
       }
-    if(prev_free == (unsigned int)starter)
-      {
-	*starter = (unsigned int)bp;
-	/* printf("starter succ2 %p\n", (void *)(*starter)); */
-      }
-    else
-      {
-	*((unsigned int *)prev_free + 1) = (unsigned int)bp;
-      }
-    *((unsigned int *)bp) = prev_free;
-    *((unsigned int *)bp + 1) = succ_free;
+    PUT_SUCC(prev_free, (unsigned int)bp);
+    PUT_PREV(bp, prev_free);
+    PUT_SUCC(bp, succ_free);
   }
   else {
     PUT(HDRP(bp), PACK(csize, 1));
     PUT(FTRP(bp), PACK(csize, 1));
-    /* printf("prev_free %p, succ_free %p\n", (void *)prev_free, (void *)succ_free) */;
-    if(prev_free == (unsigned int)starter && succ_free)
-      {
-	*starter = succ_free;
-	*((unsigned int *)succ_free) = prev_free;
-      }
-    else if(prev_free == (unsigned int)starter && !succ_free)
-      {
-	*starter = succ_free;
-      }
-    else if(!succ_free)
-      {
-	*((unsigned int *)prev_free + 1) = succ_free;
-      }
-    else
-      {
-	*((unsigned int *)prev_free + 1) = succ_free;
-	*((unsigned int *)succ_free) = prev_free;
-      }
+    PUT_SUCC(prev_free, succ_free);
+    if(succ_free) PUT_PREV(succ_free, prev_free);
   }
 }
 
@@ -433,15 +373,12 @@ static void *find_fit(size_t asize)
 {
   /* First-fit search */
   unsigned int bp;
-
-  /* printf("starter succ3 %p\n", (void *)(*starter)); */
-  for (bp = *starter; bp != 0; bp = *((unsigned int *)bp + 1)) {
-    /* printf("looping %p size %d asize %d\n", (void *)bp, GET_SIZE(HDRP(bp)), (int)asize); */
-    if (asize <= GET_SIZE(HDRP(bp))) {
-      /* printf("fit address %p\n", (void *)bp); */
-      return (void *)bp;
+  
+  for (bp = GET_SUCC(starter); bp != 0; bp = GET_SUCC(bp))
+    {
+      if (asize <= GET_SIZE(HDRP(bp)))
+	return (void *)bp;
     }
-  }
   return NULL; /* No fit */
 }
 
@@ -478,13 +415,13 @@ static void checkblock(void *bp)
 static void checkchain(unsigned int *starter)
 {
   unsigned int *prev_chain = starter;
-  unsigned int succ_chain = *starter;
+  unsigned int succ_chain = GET_SUCC(starter);
   while(succ_chain)
     {
       printf("{%p} -> {%p}\n", prev_chain, (void *)succ_chain);
-      printf("{%p} <- {%p}\n", (void *)(*((unsigned int *)succ_chain)), (void *)succ_chain);
+      printf("{%p} <- {%p}\n", (void *)GET_PREV(succ_chain), (void *)succ_chain);
       prev_chain = (unsigned int *)succ_chain;
-      succ_chain = *((unsigned int *)(succ_chain) + 1);
+      succ_chain = GET_SUCC(succ_chain);
     }
   printf("Stopped check chain\n");
 }
@@ -511,5 +448,8 @@ void check(int verbose)
   if ((GET_SIZE(HDRP(bp)) != 0) || !(GET_ALLOC(HDRP(bp))))
     printf("Bad epilogue header\n");
   if(verbose)
-    printblock(bp);
+    {
+      printblock(bp);
+      checkchain(starter);
+    }
 }
