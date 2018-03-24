@@ -6,8 +6,8 @@
  * footers.  Blocks are never coalesced or reused. Realloc is
  * implemented directly using mm_malloc and mm_free.
  *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
+ * Based on an explicit, double linked free list structure;
+ * and a free strategy LIFO is applied to increase the performance.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,7 +35,6 @@ team_t team = {
   ""
 };
 
-/* explicit free list */
 /* Basic constants and macros */
 #define WSIZE       4       /* Word and header/footer size (bytes) */
 #define DSIZE       8       /* Double word size (bytes) */
@@ -81,14 +80,15 @@ static unsigned int *starter = 0;
 /* Function prototypes for internal helper routines */
 static void *extend_heap(size_t words);
 static void place(void *bp, size_t asize);
+static void realloc_place(void *bp, size_t asize);
 static void *find_fit(size_t asize);
 static void *coalesce(void *bp);
+static void *realloc_coalesce(void *bp, size_t asize, int *is_next_free);
 static void printblock(void *bp);
 static void check(int verbose);
 static void checkblock(void *bp);
 static void checkchain(int verbose);
-void mm_check(int verbose);
-/* end explicit free list */
+static void mm_check(int verbose);
 
 
 /* single word (4) or double word (8) alignment */
@@ -98,13 +98,10 @@ void mm_check(int verbose);
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
 
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
-/* based on explicit free list */
 {
   void *bp;
   mem_init();
@@ -133,25 +130,19 @@ int mm_init(void)
  * Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size)
-/* based on explicit free list */
 {
   size_t asize;      /* Adjusted block size */
   size_t extendsize; /* Amount to extend heap if no fit */
   char *bp;
   
-  if (heap_listp == 0){
-    mm_init();
-  }
+  if (heap_listp == 0) mm_init();
   
   /* Ignore spurious requests */
-  if (size == 0)
-    return NULL;
+  if (size == 0) return NULL;
 
   /* Adjust block size to include overhead and alignment reqs. */
-  if (size <= DSIZE)
-    asize = 2*DSIZE;
-  else
-    asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE);
+  if (size <= DSIZE) asize = 2*DSIZE;
+  else asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE);
 
   /* Search the free list for a fit */
   if ((bp = (char *)find_fit(asize)) != NULL) {
@@ -161,8 +152,7 @@ void *mm_malloc(size_t size)
 
   /* No fit found. Get more memory and place the block */
   extendsize = MAX(asize,CHUNKSIZE);
-  if ((bp = (char *)extend_heap(extendsize/WSIZE)) == NULL)
-    return NULL;
+  if ((bp = (char *)extend_heap(extendsize/WSIZE)) == NULL) return NULL;
   place(bp, asize);
   return bp;
 }
@@ -171,15 +161,11 @@ void *mm_malloc(size_t size)
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *bp)
-/* based on explicit free list */
 {
-  if (bp == 0)
-    return;
+  if (bp == 0) return;
   
   size_t size = GET_SIZE(HDRP(bp));
-  if (heap_listp == 0){
-    mm_init();
-  }
+  if (heap_listp == 0) mm_init();
   
   PUT(HDRP(bp), PACK(size, 0));
   PUT(FTRP(bp), PACK(size, 0));
@@ -214,7 +200,6 @@ void chain2prevnext(void *bp)
  * coalesce - Boundary tag coalescing. Return ptr to coalesced block
  */
 static void *coalesce(void *bp)
-/* based on a explicit free list */
 {
   void *prev_bp = PREV_BLKP(bp), *next_bp = NEXT_BLKP(bp);
   size_t prev_alloc = GET_ALLOC(FTRP(prev_bp));
@@ -260,7 +245,8 @@ static void *coalesce(void *bp)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-  size_t oldsize;
+  int is_next_free;
+  size_t oldsize, asize, cp_size;
   void *newptr;
 
   /* If size == 0 then this is just free, and we return NULL. */
@@ -270,26 +256,40 @@ void *mm_realloc(void *ptr, size_t size)
   }
 
   /* If oldptr is NULL, then this is just malloc. */
-  if(ptr == NULL) {
-    return mm_malloc(size);
-  }
-
-  newptr = mm_malloc(size);
-
-  /* If realloc() fails the original block is left untouched  */
-  if(!newptr) {
-    return 0;
-  }
-
-  /* Copy the old data. */
+  if(ptr == NULL) return mm_malloc(size);
+  
+  asize = ALIGN(size+DSIZE);
   oldsize = GET_SIZE(HDRP(ptr));
-  if(size < oldsize) oldsize = size;
-  memcpy(newptr, ptr, oldsize);
+  cp_size = oldsize - DSIZE;
 
-  /* Free the old block. */
-  mm_free(ptr);
-
-  return newptr;
+  if(oldsize == asize) return ptr;
+  else if(oldsize < asize)
+    {
+      newptr = realloc_coalesce(ptr, asize, &is_next_free);
+      if(is_next_free)
+	{
+	  realloc_place(newptr, asize);
+	  return newptr;
+	}
+      else if(!is_next_free && newptr != ptr)
+	{
+	  memcpy(newptr, ptr, cp_size);
+	  realloc_place(newptr, asize);
+	  return newptr;
+	}
+      else
+	{
+	  newptr = mm_malloc(asize);
+	  memcpy(newptr, ptr, cp_size);
+	  mm_free(ptr);
+	  return newptr;
+	}
+    }
+  else
+    {
+      realloc_place(ptr, asize);
+      return ptr;
+    }
 }
 
 /*
@@ -307,7 +307,6 @@ void mm_check(int verbose)
 /*
  * extend_heap - Extend heap with free block and return its block pointer
  */
-/* $begin mmextendheap */
 static void *extend_heap(size_t words)
 {
   char *bp;
@@ -315,8 +314,7 @@ static void *extend_heap(size_t words)
 
   /* Allocate an even number of words to maintain alignment */
   size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
-  if ((long)(bp = (char *)mem_sbrk(size)) == -1)
-    return NULL;
+  if ((long)(bp = (char *)mem_sbrk(size)) == -1) return NULL;
 
   /* Initialize free block header/footer and the epilogue header */
   PUT(HDRP(bp), PACK(size, 0));         /* Free block header */
@@ -352,6 +350,82 @@ static void place(void *bp, size_t asize)
 }
 
 /*
+ * realloc_place - Place block of asize bytes at start of free block bp
+ * and split if remainder would be at least minimum block size
+ * mostly alike the previous function place, but remove some statements
+ * fot its usage in function mm_realloc
+ */
+static void realloc_place(void *bp, size_t asize)
+{
+  size_t csize = GET_SIZE(HDRP(bp));
+
+  if ((csize - asize) >= (2*DSIZE)) {
+    PUT(HDRP(bp), PACK(asize, 1));
+    PUT(FTRP(bp), PACK(asize, 1));
+    bp = NEXT_BLKP(bp);
+    PUT(HDRP(bp), PACK(csize-asize, 0));
+    PUT(FTRP(bp), PACK(csize-asize, 0));
+    coalesce(bp);
+  }
+  else {
+    PUT(HDRP(bp), PACK(csize, 1));
+    PUT(FTRP(bp), PACK(csize, 1));
+  }
+}
+
+/*
+ * coalesce - Boundary tag coalescing. Return ptr to coalesced block
+ * mostly alike the previous function coalesce, but remove some statements
+ * fot its usage in function mm_realloc
+ */
+static void *realloc_coalesce(void *bp, size_t asize, int *is_next_free)
+{
+  void *prev_bp = PREV_BLKP(bp), *next_bp = NEXT_BLKP(bp);
+  size_t prev_alloc = GET_ALLOC(FTRP(prev_bp));
+  size_t next_alloc = GET_ALLOC(HDRP(next_bp));
+  size_t size = GET_SIZE(HDRP(bp));
+  *is_next_free = 0;
+
+  if (prev_alloc && next_alloc) {}           /* Case 1 */
+
+  else if (prev_alloc && !next_alloc) {      /* Case 2 */
+    size += GET_SIZE(HDRP(next_bp));
+    if(size >= asize)
+      {
+	PUT(HDRP(bp), PACK(size, 0));
+	PUT(FTRP(next_bp), PACK(size,0));
+	chain2prevnext(next_bp);
+	*is_next_free = 1;
+      }
+  }
+
+  else if (!prev_alloc && next_alloc) {      /* Case 3 */
+    size += GET_SIZE(HDRP(prev_bp));
+    if(size >= asize)
+      {
+	PUT(FTRP(bp), PACK(size, 0));
+	PUT(HDRP(prev_bp), PACK(size, 0));
+	chain2prevnext(prev_bp);
+	bp = prev_bp;
+      }
+  }
+
+  else {                                     /* Case 4 */
+    size += GET_SIZE(HDRP(prev_bp)) +
+      GET_SIZE(FTRP(next_bp));
+    if(size >= asize)
+      {
+	PUT(HDRP(prev_bp), PACK(size, 0));
+	PUT(FTRP(next_bp), PACK(size, 0));
+	chain2prevnext(next_bp);
+	chain2prevnext(prev_bp);
+	bp = prev_bp;
+      }
+  }
+  return bp;
+}
+
+/*
  * find_fit - Find a fit for a block with asize bytes
  */
 static void *find_fit(size_t asize)
@@ -367,6 +441,9 @@ static void *find_fit(size_t asize)
   return NULL; /* No fit */
 }
 
+/*
+ * printblock - Print the detail info of a block
+ */
 static void printblock(void *bp)
 {
   size_t hsize, halloc, fsize, falloc;
@@ -386,6 +463,10 @@ static void printblock(void *bp)
 	 fsize, (falloc ? 'a' : 'f'));
 }
 
+/*
+ * checkblock - Check if a block is not doubleword algined
+ * or header-footer not matched
+ */
 static void checkblock(void *bp)
 {
   if ((size_t)bp % 8)
@@ -397,6 +478,9 @@ static void checkblock(void *bp)
     }
 }
 
+/*
+ * checkchain - Check if the double linked list is linked in order
+ */
 static void checkchain(int verbose)
 {
   unsigned int *prev_chain = starter;
@@ -413,7 +497,6 @@ static void checkchain(int verbose)
       prev_chain = (unsigned int *)succ_chain;
       succ_chain = (unsigned int *)GET_SUCC(succ_chain);
     }
-  printf("\n");
 }
 
 /*
