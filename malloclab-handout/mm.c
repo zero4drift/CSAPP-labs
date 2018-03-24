@@ -187,82 +187,70 @@ void mm_free(void *bp)
 }
 
 /*
+ * chain2starter - chain a free blk to starter
+ */
+void chain2starter(void* bp)
+{
+  unsigned int starter_succ_free = GET_SUCC(starter);
+  PUT_PREV(bp, starter);
+  PUT_SUCC(starter, bp);
+  PUT_SUCC(bp, starter_succ_free);
+  if(starter_succ_free) PUT_PREV(starter_succ_free, bp);
+}
+
+/*
+ * chain2prevnext - chain the free prev and next of a free blk
+ */
+void chain2prevnext(void *bp)
+{
+  unsigned int succ_free, prev_free;
+  succ_free = GET_SUCC(bp);
+  prev_free = GET_PREV(bp);
+  PUT_SUCC(prev_free, succ_free);
+  if(succ_free) PUT_PREV(succ_free, prev_free);
+}
+
+/*
  * coalesce - Boundary tag coalescing. Return ptr to coalesced block
  */
 static void *coalesce(void *bp)
 /* based on a explicit free list */
 {
-  void *prev_bp, *next_bp;
-  unsigned int succ_free, prev_free, starter_succ_free;
-  size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-  size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+  void *prev_bp = PREV_BLKP(bp), *next_bp = NEXT_BLKP(bp);
+  size_t prev_alloc = GET_ALLOC(FTRP(prev_bp));
+  size_t next_alloc = GET_ALLOC(HDRP(next_bp));
   size_t size = GET_SIZE(HDRP(bp));
 
   if (prev_alloc && next_alloc) {            /* Case 1 */
-    starter_succ_free = GET_SUCC(starter);
-    PUT_PREV(bp, starter);
-    PUT_SUCC(starter, bp);
-    PUT_SUCC(bp, starter_succ_free);
-    if(starter_succ_free) PUT_PREV(starter_succ_free, bp);
+    chain2starter(bp);
   }
 
   else if (prev_alloc && !next_alloc) {      /* Case 2 */
-    next_bp = NEXT_BLKP(bp);
     size += GET_SIZE(HDRP(next_bp));
-    prev_free = GET_PREV(next_bp);
-    succ_free = GET_SUCC(next_bp);
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(next_bp), PACK(size,0));
-    if(succ_free) PUT_PREV(succ_free, prev_free);
-    PUT_SUCC(prev_free, succ_free);
-    starter_succ_free = GET_SUCC(starter);
-    PUT_PREV(bp, starter);
-    PUT_SUCC(starter, bp);
-    PUT_SUCC(bp, starter_succ_free);
-    if(starter_succ_free)
-      PUT_PREV(starter_succ_free, bp);
+    chain2prevnext(next_bp);
+    chain2starter(bp);
   }
 
   else if (!prev_alloc && next_alloc) {      /* Case 3 */
-    prev_bp = PREV_BLKP(bp);
-    prev_free = GET_PREV(prev_bp);
-    succ_free = GET_SUCC(prev_bp);
     size += GET_SIZE(HDRP(prev_bp));
     PUT(FTRP(bp), PACK(size, 0));
     PUT(HDRP(prev_bp), PACK(size, 0));
+    chain2prevnext(prev_bp);
     bp = prev_bp;
-    if(succ_free) PUT_PREV(succ_free, prev_free);
-    PUT_SUCC(prev_free, succ_free);
-    starter_succ_free = GET_SUCC(starter);
-    PUT_PREV(bp, starter);
-    PUT_SUCC(starter, bp);
-    PUT_SUCC(bp, starter_succ_free);
-    if(starter_succ_free)
-      PUT_PREV(starter_succ_free, bp);
+    chain2starter(bp);
   }
 
   else {                                     /* Case 4 */
-    prev_bp = PREV_BLKP(bp);
-    next_bp = NEXT_BLKP(bp);
     size += GET_SIZE(HDRP(prev_bp)) +
       GET_SIZE(FTRP(next_bp));
-    succ_free = GET_SUCC(next_bp);
-    prev_free = GET_PREV(next_bp);
-    PUT_SUCC(prev_free, succ_free);
-    if(succ_free) PUT_PREV(succ_free, prev_free);
     PUT(HDRP(prev_bp), PACK(size, 0));
     PUT(FTRP(next_bp), PACK(size, 0));
-    bp = PREV_BLKP(bp);
-    prev_free = GET_PREV(bp);
-    succ_free = GET_SUCC(bp);
-    if(succ_free) PUT_PREV(succ_free, prev_free);
-    PUT_SUCC(prev_free, succ_free);
-    starter_succ_free = GET_SUCC(starter);
-    PUT_PREV(bp, starter);
-    PUT_SUCC(starter, bp);
-    PUT_SUCC(bp, starter_succ_free);
-    if(starter_succ_free)
-      PUT_PREV(starter_succ_free, bp);
+    chain2prevnext(next_bp);
+    chain2prevnext(prev_bp);
+    bp = prev_bp;
+    chain2starter(bp);
   }
   return bp;
 }
@@ -346,9 +334,8 @@ static void *extend_heap(size_t words)
 static void place(void *bp, size_t asize)
 {
   size_t csize = GET_SIZE(HDRP(bp));
-  unsigned int prev_free, succ_free;
-  prev_free = GET_PREV(bp);
-  succ_free = GET_SUCC(bp);
+
+  chain2prevnext(bp);
 
   if ((csize - asize) >= (2*DSIZE)) {
     PUT(HDRP(bp), PACK(asize, 1));
@@ -356,15 +343,11 @@ static void place(void *bp, size_t asize)
     bp = NEXT_BLKP(bp);
     PUT(HDRP(bp), PACK(csize-asize, 0));
     PUT(FTRP(bp), PACK(csize-asize, 0));
-    PUT_SUCC(prev_free, succ_free);
-    if(succ_free) PUT_PREV(succ_free, prev_free);
     coalesce(bp);
   }
   else {
     PUT(HDRP(bp), PACK(csize, 1));
     PUT(FTRP(bp), PACK(csize, 1));
-    PUT_SUCC(prev_free, succ_free);
-    if(succ_free) PUT_PREV(succ_free, prev_free);
   }
 }
 
@@ -374,9 +357,9 @@ static void place(void *bp, size_t asize)
 static void *find_fit(size_t asize)
 {
   /* First-fit search */
-  unsigned int bp;
+  unsigned int *bp;
   
-  for (bp = GET_SUCC(starter); bp != 0; bp = GET_SUCC(bp))
+  for (bp = (unsigned int *)GET_SUCC(starter); bp != 0; bp = (unsigned int *)GET_SUCC(bp))
     {
       if (asize <= GET_SIZE(HDRP(bp)))
 	return (void *)bp;
@@ -417,7 +400,7 @@ static void checkblock(void *bp)
 static void checkchain(int verbose)
 {
   unsigned int *prev_chain = starter;
-  unsigned int succ_chain = GET_SUCC(starter);
+  unsigned int *succ_chain = (unsigned int *)GET_SUCC(starter);
   while(succ_chain)
     {
       if(verbose)
@@ -426,16 +409,9 @@ static void checkchain(int verbose)
 	  printf("{%p} <- {%p}\n", (void *)GET_PREV(succ_chain), (void *)succ_chain);
 	}
       if(prev_chain != (void *)GET_PREV(succ_chain))
-	{
-	  printf("%p, %p unmatch\n", prev_chain, (void *)GET_PREV(succ_chain));
-	  printf("prev %p, succ %p\n", (void *)GET_PREV(prev_chain), (void *)GET_SUCC(prev_chain));
-	  printf("prev %p, succ %p\n", (void *)GET_PREV((void *)GET_PREV(succ_chain)), (void *)GET_SUCC((void *)GET_PREV(succ_chain)));
-	  printf("%p\n", (unsigned int *)GET_SUCC(starter));
-	  printf("%p\n", starter);
-	  exit(1);
-	}
+	printf("%p, %p unmatch\n", prev_chain, (void *)GET_PREV(succ_chain));
       prev_chain = (unsigned int *)succ_chain;
-      succ_chain = GET_SUCC(succ_chain);
+      succ_chain = (unsigned int *)GET_SUCC(succ_chain);
     }
   printf("\n");
 }
@@ -447,6 +423,7 @@ void check(int verbose)
 {
   char *bp = heap_listp;
 
+  checkchain(verbose);
   if (verbose)
     printf("Heap (%p):\n", heap_listp);
 
@@ -463,5 +440,4 @@ void check(int verbose)
     printf("Bad epilogue header\n");
   if(verbose)
     printblock(bp);
-  checkchain(verbose);
 }
