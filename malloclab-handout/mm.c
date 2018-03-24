@@ -173,7 +173,6 @@ void *mm_malloc(size_t size)
 void mm_free(void *bp)
 /* based on explicit free list */
 {
-  unsigned int prev_free, succ_free, starter_succ_free;
   if (bp == 0)
     return;
   
@@ -184,19 +183,7 @@ void mm_free(void *bp)
   
   PUT(HDRP(bp), PACK(size, 0));
   PUT(FTRP(bp), PACK(size, 0));
-  bp = coalesce(bp);
-
-  starter_succ_free = GET_SUCC(starter);
-  prev_free = GET_PREV(bp);
-  if(prev_free == (unsigned int)starter) return;
-  succ_free = GET_SUCC(bp);
-  if(succ_free) PUT_PREV(succ_free, prev_free);
-  if(prev_free) PUT_SUCC(prev_free, succ_free);
-  PUT_PREV(bp, starter);
-  PUT_SUCC(starter, bp);
-  PUT_SUCC(bp, starter_succ_free);
-  if(starter_succ_free)
-    PUT_PREV(starter_succ_free, bp);
+  coalesce(bp);
 }
 
 /*
@@ -206,15 +193,17 @@ static void *coalesce(void *bp)
 /* based on a explicit free list */
 {
   void *prev_bp, *next_bp;
-  unsigned int succ_free, prev_free;
+  unsigned int succ_free, prev_free, starter_succ_free;
   size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
   size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
   size_t size = GET_SIZE(HDRP(bp));
 
   if (prev_alloc && next_alloc) {            /* Case 1 */
-    PUT_PREV(bp, 0);
-    PUT_SUCC(bp, 0);
-    return bp;
+    starter_succ_free = GET_SUCC(starter);
+    PUT_PREV(bp, starter);
+    PUT_SUCC(starter, bp);
+    PUT_SUCC(bp, starter_succ_free);
+    if(starter_succ_free) PUT_PREV(starter_succ_free, bp);
   }
 
   else if (prev_alloc && !next_alloc) {      /* Case 2 */
@@ -223,22 +212,33 @@ static void *coalesce(void *bp)
     prev_free = GET_PREV(next_bp);
     succ_free = GET_SUCC(next_bp);
     PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size,0));
-    PUT_PREV(bp, prev_free);
-    PUT_SUCC(bp, succ_free);
-    if(succ_free)
-      {
-	PUT_PREV(succ_free, (unsigned int)bp);
-      }
-    PUT_SUCC(prev_free, (unsigned int)bp);
+    PUT(FTRP(next_bp), PACK(size,0));
+    if(succ_free) PUT_PREV(succ_free, prev_free);
+    PUT_SUCC(prev_free, succ_free);
+    starter_succ_free = GET_SUCC(starter);
+    PUT_PREV(bp, starter);
+    PUT_SUCC(starter, bp);
+    PUT_SUCC(bp, starter_succ_free);
+    if(starter_succ_free)
+      PUT_PREV(starter_succ_free, bp);
   }
 
   else if (!prev_alloc && next_alloc) {      /* Case 3 */
     prev_bp = PREV_BLKP(bp);
+    prev_free = GET_PREV(prev_bp);
+    succ_free = GET_SUCC(prev_bp);
     size += GET_SIZE(HDRP(prev_bp));
     PUT(FTRP(bp), PACK(size, 0));
     PUT(HDRP(prev_bp), PACK(size, 0));
-    bp = PREV_BLKP(bp);
+    bp = prev_bp;
+    if(succ_free) PUT_PREV(succ_free, prev_free);
+    PUT_SUCC(prev_free, succ_free);
+    starter_succ_free = GET_SUCC(starter);
+    PUT_PREV(bp, starter);
+    PUT_SUCC(starter, bp);
+    PUT_SUCC(bp, starter_succ_free);
+    if(starter_succ_free)
+      PUT_PREV(starter_succ_free, bp);
   }
 
   else {                                     /* Case 4 */
@@ -253,6 +253,16 @@ static void *coalesce(void *bp)
     PUT(HDRP(prev_bp), PACK(size, 0));
     PUT(FTRP(next_bp), PACK(size, 0));
     bp = PREV_BLKP(bp);
+    prev_free = GET_PREV(bp);
+    succ_free = GET_SUCC(bp);
+    if(succ_free) PUT_PREV(succ_free, prev_free);
+    PUT_SUCC(prev_free, succ_free);
+    starter_succ_free = GET_SUCC(starter);
+    PUT_PREV(bp, starter);
+    PUT_SUCC(starter, bp);
+    PUT_SUCC(bp, starter_succ_free);
+    if(starter_succ_free)
+      PUT_PREV(starter_succ_free, bp);
   }
   return bp;
 }
@@ -312,7 +322,6 @@ void mm_check(int verbose)
 /* $begin mmextendheap */
 static void *extend_heap(size_t words)
 {
-  unsigned int prev_free, succ_free, starter_succ_free;
   char *bp;
   size_t size;
 
@@ -327,20 +336,7 @@ static void *extend_heap(size_t words)
   PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
   
   /* Coalesce if the previous block was free */
-  bp = coalesce(bp);
-  starter_succ_free = GET_SUCC(starter);
-  prev_free = GET_PREV(bp);
-  if(prev_free == (unsigned int)starter) return bp;
-  succ_free = GET_SUCC(bp);
-  if(succ_free) PUT_PREV(succ_free, prev_free);
-  if(prev_free) PUT_SUCC(prev_free, succ_free);
-  PUT_PREV(bp, starter);
-  PUT_SUCC(starter, bp);
-  PUT_SUCC(bp, starter_succ_free);
-  if(starter_succ_free)
-    PUT_PREV(starter_succ_free, bp);
-
-  return bp;
+  return coalesce(bp);
 }
 
 /*
@@ -360,13 +356,9 @@ static void place(void *bp, size_t asize)
     bp = NEXT_BLKP(bp);
     PUT(HDRP(bp), PACK(csize-asize, 0));
     PUT(FTRP(bp), PACK(csize-asize, 0));
-    if(succ_free)
-      {
-	PUT_PREV(succ_free, (unsigned int)bp);
-      }
-    PUT_SUCC(prev_free, (unsigned int)bp);
-    PUT_PREV(bp, prev_free);
-    PUT_SUCC(bp, succ_free);
+    PUT_SUCC(prev_free, succ_free);
+    if(succ_free) PUT_PREV(succ_free, prev_free);
+    coalesce(bp);
   }
   else {
     PUT(HDRP(bp), PACK(csize, 1));
