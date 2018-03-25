@@ -6,8 +6,9 @@
  * footers.  Blocks are never coalesced or reused. Realloc is
  * implemented directly using mm_malloc and mm_free.
  *
- * Based on an explicit, double linked free list structure;
- * and a free strategy LIFO is applied to increase the performance.
+ * Based on an segregated list classified by size;
+ * every one of which leads an explicit, double linked free list structure;
+ * and free strategy LIFO for free list is applied to increase the performance.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,19 +70,15 @@ team_t team = {
 
 /* Global variables */
 static char *heap_listp = 0;  /* Pointer to first block */
-/* 
-   A pointer whose value is an address of second heap byte
-   That place always sotres 0 for there would be no prev free block
-   the next word stores an address of the successive free block
-   If there is no successive one, the content is 0
-*/
-static unsigned int *starter = 0;
+static unsigned int *segregate_starter = 0; /* Pointer to first one of segregated list */
+
 
 /* Function prototypes for internal helper routines */
 static void *extend_heap(size_t words);
 static void place(void *bp, size_t asize);
 static void realloc_place(void *bp, size_t asize);
 static void *find_fit(size_t asize);
+static void *find_segregate(size_t size);
 static void *coalesce(void *bp);
 static void *realloc_coalesce(void *bp, size_t asize, int *is_next_free);
 static void printblock(void *bp);
@@ -107,17 +104,26 @@ int mm_init(void)
   mem_init();
 
   /* Create the initial empty heap */
-  if ((heap_listp = (char *)mem_sbrk(6*WSIZE)) == (char *)-1)
+  if ((heap_listp = (char *)mem_sbrk(14*WSIZE)) == (char *)-1)
     return -1;
+
+  segregate_starter = (unsigned int *)heap_listp;
   
-  starter = (unsigned int *)mem_heap_lo() + 1;
-  PUT(heap_listp, 0);	                       /* Alignment padding */
-  PUT_PREV(starter, 0);
-  PUT_SUCC(starter, 0);			       /* First, starter is alone */
-  PUT(heap_listp + (3*WSIZE), PACK(DSIZE, 1)); /* Prologue header */
-  PUT(heap_listp + (4*WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
-  PUT(heap_listp + (5*WSIZE), PACK(0, 1));     /* Epilogue header */
-  heap_listp += (4*WSIZE);
+  PUT(heap_listp,0);              /* free list, block size <=16 */
+  PUT(heap_listp+(1*WSIZE),0);    /* block size <=32 */
+  PUT(heap_listp+(2*WSIZE),0);    /* block size <=64 */
+  PUT(heap_listp+(3*WSIZE),0);    /* block size <=128 */
+  PUT(heap_listp+(4*WSIZE),0);    /* block size <=256 */
+  PUT(heap_listp+(5*WSIZE),0);    /* block size <=512 */
+  PUT(heap_listp+(6*WSIZE),0);    /* block size <=1024 */
+  PUT(heap_listp+(7*WSIZE),0);    /* block size <=2048 */
+  PUT(heap_listp+(8*WSIZE),0);    /* block size <=4096 */
+  PUT(heap_listp+(9*WSIZE),0);    /* block size >4096 */
+  PUT(heap_listp+(10*WSIZE),0);	  /* Align padding */
+  PUT(heap_listp + (11*WSIZE), PACK(DSIZE, 1)); /* Prologue header */
+  PUT(heap_listp + (12*WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
+  PUT(heap_listp + (13*WSIZE), PACK(0, 1));     /* Epilogue header */
+  heap_listp += (12*WSIZE);
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
   bp = extend_heap(CHUNKSIZE/WSIZE);
   if (bp == NULL)
@@ -173,15 +179,18 @@ void mm_free(void *bp)
 }
 
 /*
- * chain2starter - chain a free blk to starter
+ * chain2segregate - chain a free blk to a specified starter
+ * based on its size
  */
-void chain2starter(void* bp)
+void chain2segregate(void* bp, size_t size)
 {
-  unsigned int starter_succ_free = GET_SUCC(starter);
+  unsigned int *starter;
+  starter = find_segregate(size);
+  unsigned int segregate_succ_free = *starter;
   PUT_PREV(bp, starter);
-  PUT_SUCC(starter, bp);
-  PUT_SUCC(bp, starter_succ_free);
-  if(starter_succ_free) PUT_PREV(starter_succ_free, bp);
+  *starter = (unsigned int)bp;
+  PUT_SUCC(bp, segregate_succ_free);
+  if(segregate_succ_free) PUT_PREV(segregate_succ_free, bp);
 }
 
 /*
@@ -189,10 +198,11 @@ void chain2starter(void* bp)
  */
 void chain2prevnext(void *bp)
 {
-  unsigned int succ_free, prev_free;
+  unsigned int succ_free, *prev_free;
   succ_free = GET_SUCC(bp);
-  prev_free = GET_PREV(bp);
-  PUT_SUCC(prev_free, succ_free);
+  prev_free = (unsigned int *)GET_PREV(bp);
+  if((segregate_starter + 9) >= prev_free) *prev_free = succ_free;
+  else PUT_SUCC(prev_free, succ_free);
   if(succ_free) PUT_PREV(succ_free, prev_free);
 }
 
@@ -207,7 +217,7 @@ static void *coalesce(void *bp)
   size_t size = GET_SIZE(HDRP(bp));
 
   if (prev_alloc && next_alloc) {            /* Case 1 */
-    chain2starter(bp);
+    chain2segregate(bp, size);
   }
 
   else if (prev_alloc && !next_alloc) {      /* Case 2 */
@@ -215,7 +225,7 @@ static void *coalesce(void *bp)
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(next_bp), PACK(size,0));
     chain2prevnext(next_bp);
-    chain2starter(bp);
+    chain2segregate(bp, size);
   }
 
   else if (!prev_alloc && next_alloc) {      /* Case 3 */
@@ -224,7 +234,7 @@ static void *coalesce(void *bp)
     PUT(HDRP(prev_bp), PACK(size, 0));
     chain2prevnext(prev_bp);
     bp = prev_bp;
-    chain2starter(bp);
+    chain2segregate(bp, size);
   }
 
   else {                                     /* Case 4 */
@@ -235,13 +245,14 @@ static void *coalesce(void *bp)
     chain2prevnext(next_bp);
     chain2prevnext(prev_bp);
     bp = prev_bp;
-    chain2starter(bp);
+    chain2segregate(bp, size);
   }
   return bp;
 }
 
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
+ * memmove applied instead of memcpy, any problem of this?
  */
 void *mm_realloc(void *ptr, size_t size)
 {
@@ -273,14 +284,14 @@ void *mm_realloc(void *ptr, size_t size)
 	}
       else if(!is_next_free && newptr != ptr)
 	{
-	  memcpy(newptr, ptr, cp_size);
+	  memmove(newptr, ptr, cp_size);
 	  realloc_place(newptr, asize);
 	  return newptr;
 	}
       else
 	{
 	  newptr = mm_malloc(asize);
-	  memcpy(newptr, ptr, cp_size);
+	  memmove(newptr, ptr, cp_size);
 	  mm_free(ptr);
 	  return newptr;
 	}
@@ -299,6 +310,7 @@ void mm_check(int verbose)
 {
   check(verbose);
 }
+
 
 /*
  * The remaining routines are internal helper routines
@@ -347,6 +359,27 @@ static void place(void *bp, size_t asize)
     PUT(HDRP(bp), PACK(csize, 1));
     PUT(FTRP(bp), PACK(csize, 1));
   }
+}
+
+/*
+ * find_segregate - find the suitable segregated group based on size
+ */
+static void *find_segregate(size_t size)
+{
+  int patch = 0;
+  
+  if(size <= 16) patch = 0;
+  else if(size <= 32) patch = 1;
+  else if(size <= 64) patch = 2;
+  else if(size <= 128) patch = 3;
+  else if(size <= 256) patch = 4;
+  else if(size <= 512) patch = 5;
+  else if(size <= 1024) patch = 6;
+  else if(size <= 2048) patch = 7;
+  else if(size <= 4096) patch = 8;
+  else patch = 9;
+
+  return segregate_starter + patch;
 }
 
 /*
@@ -431,12 +464,15 @@ static void *realloc_coalesce(void *bp, size_t asize, int *is_next_free)
 static void *find_fit(size_t asize)
 {
   /* First-fit search */
-  unsigned int *bp;
+  unsigned int *bp, *starter, *maxstarter = segregate_starter + 9;
   
-  for (bp = (unsigned int *)GET_SUCC(starter); bp != 0; bp = (unsigned int *)GET_SUCC(bp))
+  for(starter = find_segregate(asize); starter <= maxstarter; starter += 1)
     {
-      if (asize <= GET_SIZE(HDRP(bp)))
-	return (void *)bp;
+      for (bp = (unsigned int *)(*starter); bp != 0; bp = (unsigned int *)GET_SUCC(bp))
+	{
+	  if (asize <= GET_SIZE(HDRP(bp)))
+	    return (void *)bp;
+	}
     }
   return NULL; /* No fit */
 }
@@ -483,19 +519,23 @@ static void checkblock(void *bp)
  */
 static void checkchain(int verbose)
 {
-  unsigned int *prev_chain = starter;
-  unsigned int *succ_chain = (unsigned int *)GET_SUCC(starter);
-  while(succ_chain)
+  unsigned int *bp, *starter, *prev_chain, *succ_chain, *maxstarter = segregate_starter + 9;
+  
+  for(starter = segregate_starter; starter <= maxstarter; starter += 1)
     {
-      if(verbose)
+      for(bp = (unsigned int *)(*starter); bp != 0; bp = succ_chain)
 	{
-	  printf("{%p} -> {%p}\n", prev_chain, (void *)succ_chain);
-	  printf("{%p} <- {%p}\n", (void *)GET_PREV(succ_chain), (void *)succ_chain);
+	  succ_chain = (unsigned int *)GET_SUCC(bp);
+	  if(succ_chain) prev_chain = (unsigned int *)GET_PREV(succ_chain);
+	  else prev_chain = bp;
+	  if(verbose)
+	    {
+	      printf("{%p} -> {%p}\n", bp, succ_chain);
+	      printf("{%p} <- {%p}\n", prev_chain, succ_chain);
+	    }
+	  if(prev_chain != bp)
+	    printf("%p, %p unmatch\n", prev_chain, bp);
 	}
-      if(prev_chain != (void *)GET_PREV(succ_chain))
-	printf("%p, %p unmatch\n", prev_chain, (void *)GET_PREV(succ_chain));
-      prev_chain = (unsigned int *)succ_chain;
-      succ_chain = (unsigned int *)GET_SUCC(succ_chain);
     }
 }
 
