@@ -125,7 +125,7 @@ int mm_init(void)
   PUT(heap_listp + (13*WSIZE), PACK(0, 1));     /* Epilogue header */
   heap_listp += (12*WSIZE);
   /* Extend the empty heap with a free block of CHUNKSIZE bytes */
-  bp = extend_heap(CHUNKSIZE/WSIZE);
+  bp = extend_heap(2*DSIZE/WSIZE);
   if (bp == NULL)
     return -1;
   return 0;
@@ -223,28 +223,28 @@ static void *coalesce(void *bp)
   else if (prev_alloc && !next_alloc) {      /* Case 2 */
     size += GET_SIZE(HDRP(next_bp));
     PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(next_bp), PACK(size,0));
+    PUT(FTRP(bp), PACK(size,0));
     chain2prevnext(next_bp);
     chain2segregate(bp, size);
   }
 
   else if (!prev_alloc && next_alloc) {      /* Case 3 */
     size += GET_SIZE(HDRP(prev_bp));
-    PUT(FTRP(bp), PACK(size, 0));
-    PUT(HDRP(prev_bp), PACK(size, 0));
-    chain2prevnext(prev_bp);
     bp = prev_bp;
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+    chain2prevnext(bp);
     chain2segregate(bp, size);
   }
 
   else {                                     /* Case 4 */
     size += GET_SIZE(HDRP(prev_bp)) +
       GET_SIZE(FTRP(next_bp));
-    PUT(HDRP(prev_bp), PACK(size, 0));
-    PUT(FTRP(next_bp), PACK(size, 0));
+    bp = prev_bp;
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
     chain2prevnext(next_bp);
     chain2prevnext(prev_bp);
-    bp = prev_bp;
     chain2segregate(bp, size);
   }
   return bp;
@@ -426,7 +426,7 @@ static void *realloc_coalesce(void *bp, size_t asize, int *is_next_free)
     if(size >= asize)
       {
 	PUT(HDRP(bp), PACK(size, 0));
-	PUT(FTRP(next_bp), PACK(size,0));
+	PUT(FTRP(bp), PACK(size,0));
 	chain2prevnext(next_bp);
 	*is_next_free = 1;
       }
@@ -436,10 +436,10 @@ static void *realloc_coalesce(void *bp, size_t asize, int *is_next_free)
     size += GET_SIZE(HDRP(prev_bp));
     if(size >= asize)
       {
-	PUT(FTRP(bp), PACK(size, 0));
-	PUT(HDRP(prev_bp), PACK(size, 0));
-	chain2prevnext(prev_bp);
 	bp = prev_bp;
+	PUT(HDRP(bp), PACK(size, 0));
+	PUT(FTRP(bp), PACK(size, 0));
+	chain2prevnext(prev_bp);
       }
   }
 
@@ -448,11 +448,11 @@ static void *realloc_coalesce(void *bp, size_t asize, int *is_next_free)
       GET_SIZE(FTRP(next_bp));
     if(size >= asize)
       {
-	PUT(HDRP(prev_bp), PACK(size, 0));
-	PUT(FTRP(next_bp), PACK(size, 0));
+	bp = prev_bp;
+	PUT(HDRP(bp), PACK(size, 0));
+	PUT(FTRP(bp), PACK(size, 0));
 	chain2prevnext(next_bp);
 	chain2prevnext(prev_bp);
-	bp = prev_bp;
       }
   }
   return bp;
