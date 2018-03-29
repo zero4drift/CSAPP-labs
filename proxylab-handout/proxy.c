@@ -12,6 +12,7 @@ static const char *accept_encoding_hdr = "Accept-Encoding: gzip, deflate\r\n";
 static const char *connection_hdr = "Connection: close\r\n";
 static const char *pxy_connection_hdr = "Proxy-Connection: closer\n";
 
+void *thread(void *var);
 void sigpipe_handler(int sig);
 void doit(int fd);
 int parse_uri(char *uri, char *host, char *port, char *path);
@@ -25,6 +26,7 @@ int main(int argc, char **argv)
   char hostname[MAXLINE], port[MAXLINE];
   socklen_t clientlen;
   struct sockaddr_storage clientaddr;
+  pthread_t t_id;
 
   /* Check command line args */
   if (argc != 2) {
@@ -41,8 +43,7 @@ int main(int argc, char **argv)
     Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, 
 		port, MAXLINE, 0);
     printf("Accepted connection from (%s, %s)\n", hostname, port);
-    doit(connfd);
-    Close(connfd);
+    Pthread_create(&t_id, NULL, thread, &connfd);
   }
 }
 
@@ -99,11 +100,10 @@ int parse_uri(char *uri, char *host, char *port, char *path)
   int i;
 
   ptr = uri;
-
-  /* Read scheme */
+  
   tmp = strchr(ptr, ':');
   if (NULL == tmp) 
-    return 0;   // Error.
+    return 0;
     
   len = tmp - ptr;
   (void)strncpy(scheme, ptr, len);
@@ -111,14 +111,10 @@ int parse_uri(char *uri, char *host, char *port, char *path)
   for (i = 0; i < len; i++)
     scheme[i] = tolower(scheme[i]);
   if (strcasecmp(scheme, "http"))
-    return 0;   // Error, only support http
-
-  // Skip ':'
+    return 0;
   tmp++;
   ptr = tmp;
 
-  /* Read host */
-  // Skip "//"
   for ( i = 0; i < 2; i++ ) {
     if ( '/' != *ptr ) {
       return 0;
@@ -137,8 +133,7 @@ int parse_uri(char *uri, char *host, char *port, char *path)
   host[len] = '\0';
 
   ptr = tmp;
-
-  // Is port specified?
+  
   if (':' == *ptr) {
     ptr++;
     tmp = ptr;
@@ -150,11 +145,9 @@ int parse_uri(char *uri, char *host, char *port, char *path)
     port[len] = '\0';
     ptr = tmp;
   } else {
-    // port is not specified, use 80 since scheme is 'http' 
     port = "80";
   }
-
-  /* If this is the end of url */
+  
   if ('\0' == *ptr) {
     strcpy(path, "/");
     return 1;
@@ -212,4 +205,15 @@ void sigpipe_handler(int sig)
 {
   printf("SIGPIPE handled %d\n", sig);
   return;
+}
+
+/* thread */
+void *thread(void *var)
+{
+  int fd = *((int *)var);
+  Pthread_detach(Pthread_self());
+  Signal(SIGPIPE, sigpipe_handler);
+  doit(fd);
+  Close(fd);
+  return NULL;
 }
