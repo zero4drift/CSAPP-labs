@@ -47,7 +47,5 @@ cache *find_tail_cache(void);
 size_t get_cache_size(cache *cache_node);
 /* the size of entire cache list, only the buf size included */
 size_t get_whole_cache_size(void);
-/* delete cache node */
-void delete_cache(cache *cache_node);
 /* delete a cache_node which is in the tail */
 void delete_tail_cache(void);

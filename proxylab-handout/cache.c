@@ -147,13 +147,6 @@ cache *find_tail_cache(void)
   return temp_cache;
 }
 
-/* delete a certain cache node */
-void delete_cache(cache *cache_node)
-{
-  repair_cache_link(cache_node);
-  free(cache_node);
-}
-
 /* delete a tail cache_node */
 void delete_tail_cache(void)
 {
