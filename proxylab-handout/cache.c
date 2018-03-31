@@ -75,7 +75,6 @@ void hadnle_after_disconn(cache *cache_node)
   size = get_whole_cache_size();
   while(size > MAX_CACHE_SIZE)
     {
-      printf("1");
       delete_tail_cache();
       size = get_whole_cache_size();
     }
@@ -101,7 +100,6 @@ cache *find_cache(char *uri)
   cache *cache_node = CACHE_HEAD;
   while(cache_node)
     {
-      printf("2");
       if(!strcmp(cache_node->uri, uri))
 	return cache_node;
       else cache_node = cache_node->next_cache;
@@ -123,7 +121,6 @@ size_t get_whole_cache_size(void)
 
   while(cache_node)
     {
-      printf("3");
       if(!cache_node->conn) size += get_cache_size(cache_node);
       cache_node = cache_node->next_cache;
     }
@@ -139,7 +136,6 @@ cache *find_tail_cache(void)
 
   while(tail_cache)
     {
-      printf("4");
       if(!tail_cache->next_cache && !tail_cache->conn) return tail_cache;
       else if(!tail_cache->conn) temp_cache = tail_cache;
       tail_cache = tail_cache->next_cache;
