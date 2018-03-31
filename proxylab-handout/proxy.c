@@ -1,9 +1,6 @@
 #include "csapp.h"
+#include "cache.h"
 #include <stdio.h>
-
-/* Recommended max cache and object sizes */
-#define MAX_CACHE_SIZE 1049000
-#define MAX_OBJECT_SIZE 102400
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
@@ -52,9 +49,11 @@ void doit(int fd)
 {
   char buf[MAXLINE], up_buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
   char host[MAXLINE], path[MAXLINE], port[MAXLINE];
+  char cache[MAX_OBJECT_SIZE];
   rio_t rio, sio;
-  int up_fd;
-  size_t n;
+  int up_fd, content_type_ignore;
+  size_t n, m = 0;
+  struct cache *cache_node;
 
   /* Read request line and headers */
   Rio_readinitb(&rio, fd);
@@ -75,6 +74,15 @@ void doit(int fd)
       return;
     }
 
+  /* if already cached */
+  cache_node = find_cache(uri);
+  if(cache_node)
+    {
+      strcpy(up_buf, read_cache(cache_node));
+      Rio_writen(fd, up_buf, strlen(up_buf));
+      return;
+    }
+  /* if not cached */
   up_fd = Open_clientfd(host, port);
   Rio_readinitb(&sio, up_fd);
 
@@ -83,8 +91,14 @@ void doit(int fd)
 
   while((n = Rio_readlineb(&sio, up_buf, MAXLINE)) != 0)
     {
+      content_type_ignore = m;
+      m += n;
       Rio_writen(fd, up_buf, n);
+      if(content_type_ignore) strcat(cache, up_buf);
     }
+  if(m <= MAX_OBJECT_SIZE) cache_node = write_cache(cache, uri);
+  /* ready to disconnect */
+  hadnle_after_disconn(cache_node);
 }
 
 /* 
