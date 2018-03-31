@@ -1,8 +1,15 @@
 #include "cache.h"
 
 /* Global variable */
-cache *CACHE_HEAD = NULL;
+cache *CACHE_HEAD;
+sem_t mutex;
 
+/* initial CACHE_HEAD and sem_t mutex for the whole linked list */
+void init_cache_list(void)
+{
+  CACHE_HEAD = NULL;
+  Sem_init(&mutex, 0, 1);
+}
 /* insert cachenode as the head */
 void insert_cache_head(cache *cache_node)
 {
@@ -36,13 +43,24 @@ void repair_cache_link(cache *cache_node)
 /* write cache */
 cache *write_cache(char *buf, char *uri)
 {
+  P(&mutex);
   cache *cache_node = find_cache(uri);
-  if(!cache_node) cache_node = (cache *)malloc(sizeof(cache));
+  if(!cache_node)
+    {
+      cache_node = (cache *)malloc(sizeof(cache));
+      Sem_init(&(cache_node->mutex), 0, 1);
+    }
+  P(&(cache_node->mutex));
   cache_node->conn = 1;		/* write as connection */
   strcpy(cache_node->uri, uri);
   strcpy(cache_node->buf, buf);
-  repair_cache_link(cache_node);
-  insert_cache_head(cache_node);
+  V(&(cache_node->mutex));
+  if(!(cache_node == CACHE_HEAD))
+    {
+      repair_cache_link(cache_node);
+      insert_cache_head(cache_node);
+    }
+  V(&mutex);
   return cache_node;
 }
 
@@ -50,7 +68,10 @@ cache *write_cache(char *buf, char *uri)
 void hadnle_after_disconn(cache *cache_node)
 {
   size_t size = 0;
+  P(&(cache_node->mutex));
   cache_node->conn = 0;
+  V(&(cache_node->mutex));
+  P(&mutex);
   size = get_whole_cache_size();
   while(size > MAX_CACHE_SIZE)
     {
@@ -58,13 +79,19 @@ void hadnle_after_disconn(cache *cache_node)
       delete_tail_cache();
       size = get_whole_cache_size();
     }
+  V(&mutex);
 }
 
 /* read cache */
 char *read_cache(cache *cache_node)
 {
-  repair_cache_link(cache_node);
-  insert_cache_head(cache_node);
+  if(!(cache_node == CACHE_HEAD))
+    {
+      P(&mutex);
+      repair_cache_link(cache_node);
+      insert_cache_head(cache_node);
+      V(&mutex);
+    }
   return cache_node->buf;
 }
 

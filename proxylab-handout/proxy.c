@@ -3,11 +3,13 @@
 #include <stdio.h>
 
 /* You won't lose style points for including this long line in your code */
-static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
+static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:52.0) Gecko/20100101 Firefox/52.0\r\n";
 static const char *accept_hdr = "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n";
 static const char *accept_encoding_hdr = "Accept-Encoding: gzip, deflate\r\n";
+static const char *language_hdr = "Accept-Language: zh,en-US;q=0.7,en;q=0.3\r\n";
 static const char *connection_hdr = "Connection: close\r\n";
-static const char *pxy_connection_hdr = "Proxy-Connection: closer\n";
+static const char *pxy_connection_hdr = "Proxy-Connection: close\r\n";
+static const char *secure_hdr = "Upgrade-Insecure-Requests: 1\r\n";
 
 void *thread(void *var);
 void sigpipe_handler(int sig);
@@ -24,6 +26,8 @@ int main(int argc, char **argv)
   socklen_t clientlen;
   struct sockaddr_storage clientaddr;
   pthread_t t_id;
+
+  init_cache_list();
 
   /* Check command line args */
   if (argc != 2) {
@@ -59,7 +63,6 @@ void doit(int fd)
   Rio_readinitb(&rio, fd);
   if (!Rio_readlineb(&rio, buf, MAXLINE))
     return;
-  printf("%s", buf);
   sscanf(buf, "%s %s %s", method, uri, version);
   if (strcasecmp(method, "GET"))
     {
@@ -86,7 +89,7 @@ void doit(int fd)
   up_fd = Open_clientfd(host, port);
   Rio_readinitb(&sio, up_fd);
 
-  sprintf(up_buf, "GET %s HTTP/1.0\r\nHost: %s\r\n%s%s%s%s%s\r\n", path, host, user_agent_hdr, accept_hdr, accept_encoding_hdr, connection_hdr, pxy_connection_hdr);
+  sprintf(up_buf, "GET %s HTTP/1.0\r\nHost: %s\r\n%s%s%s%s%s%s%s\r\n", path, host, user_agent_hdr, accept_hdr, language_hdr, accept_encoding_hdr, connection_hdr, secure_hdr, pxy_connection_hdr);
   Rio_writen(up_fd, up_buf, strlen(up_buf));
 
   while((n = Rio_readlineb(&sio, up_buf, MAXLINE)) != 0)

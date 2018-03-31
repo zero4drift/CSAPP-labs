@@ -15,16 +15,20 @@
  * update the link relationship
  * put it in the most front of the list
  * then the least used one would always be the tail one
+ * a sem_t mutex ensures that only one could write in the mean time
  */
 typedef struct cache{
   int conn;			        /* is it a buf while connection */
   char buf[MAX_OBJECT_SIZE];            /* buf */
   char uri[MAXLINE];		        /* buf's uri */
+  sem_t mutex;				/* sem_t mutex */
   struct cache *next_cache;	        /* next cache */
   struct cache *prev_cache;		/* previous cache */
 }cache;
 
 
+/* initial CACHE_HEAD and a sem_t mutex for the whole linked list */
+void init_cache_list(void);
 /* insert cache_node as the head */
 void insert_cache_head(cache *cache_node);
 /* break the node relations of a cache_node, and link the prev and next */
