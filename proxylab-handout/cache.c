@@ -1,20 +1,22 @@
 #include "cache.h"
 
 /* Global variable */
+int readcnt;
 cache *CACHE_HEAD;
-sem_t mutex;
+sem_t mutex, cnt_lock;
 
 /* initial CACHE_HEAD and sem_t mutex for the whole linked list */
 void init_cache_list(void)
 {
+  readcnt = 0;
   CACHE_HEAD = NULL;
   Sem_init(&mutex, 0, 1);
+  Sem_init(&cnt_lock, 0, 1);
 }
 /* insert cachenode as the head */
 void insert_cache_head(cache *cache_node)
 {
-  if(CACHE_HEAD == cache_node) return;
-  else if(CACHE_HEAD)
+  if(CACHE_HEAD)
     {
       CACHE_HEAD->prev_cache = cache_node;
       cache_node->next_cache = CACHE_HEAD;
@@ -28,16 +30,12 @@ void insert_cache_head(cache *cache_node)
 void repair_cache_link(cache *cache_node)
 {
   cache *prev, *next;
-  if(cache_node == CACHE_HEAD) return;
-  else
-    {
-      prev = cache_node->prev_cache;
-      next = cache_node->next_cache;
-      if(prev) prev->next_cache = next;
-      if(next) next->prev_cache = prev;
-      cache_node->prev_cache = NULL;
-      cache_node->next_cache = NULL;
-    }
+  prev = cache_node->prev_cache;
+  next = cache_node->next_cache;
+  if(prev) prev->next_cache = next;
+  if(next) next->prev_cache = prev;
+  cache_node->prev_cache = NULL;
+  cache_node->next_cache = NULL;
 }
 
 /* write cache */
@@ -84,6 +82,13 @@ void hadnle_after_disconn(cache *cache_node)
 /* read cache */
 char *read_cache(cache *cache_node)
 {
+  char *buf;
+  
+  P(&cnt_lock);
+  readcnt++;
+  if(readcnt == 1) P(&(cache_node->mutex));
+  V(&cnt_lock);
+
   if(!(cache_node == CACHE_HEAD))
     {
       P(&mutex);
@@ -91,7 +96,15 @@ char *read_cache(cache *cache_node)
       insert_cache_head(cache_node);
       V(&mutex);
     }
-  return cache_node->buf;
+
+  buf = cache_node->buf;
+      
+  P(&cnt_lock);
+  readcnt--;
+  if(readcnt == 0) V(&(cache_node->mutex));
+  V(&cnt_lock);
+  
+  return buf;
 }
 
 /* find cache based on host and path, if not exists, return NULL */
@@ -149,7 +162,9 @@ void delete_tail_cache(void)
   cache *tail_cache = find_tail_cache();
   if(tail_cache)
     {
+      P(&mutex);
       repair_cache_link(tail_cache);
+      V(&mutex);
       free(tail_cache);
     }
 }
