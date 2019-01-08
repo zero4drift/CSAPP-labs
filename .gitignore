@@ -1,5 +1,5 @@
-# ycmd config
-.ycm_extra_conf.py
+# ccls
+.ccls-cache
 
 # Prerequisites
 *.d
