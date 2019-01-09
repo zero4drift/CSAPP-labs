@@ -1,7 +1,6 @@
 %clang
 %c -std=c11
 %c -pthread
-%h --include=Global.h
 
 # Includes
 -I/usr/include
